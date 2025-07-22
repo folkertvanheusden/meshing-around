@@ -38,6 +38,7 @@ Welcome to the Mesh Bot project! This feature-rich bot is designed to enhance yo
 
 ### Proximity Alerts
 - **Location-Based Alerts**: Get notified when members arrive back at a configured lat/long, perfect for remote locations like campsites.
+- **High Flying Alerts**: Get notified when nodes with high altitude are seen on mesh
 
 ### CheckList / Check In Out
 - **Asset Tracking**: Maintain a list of node/asset checkin and checkout. Usefull for accountability of people, assets. Radio-Net, FEMA, Trailhead.
@@ -147,7 +148,6 @@ enabled = True
 lat = 48.50
 lon = -123.0
 UseMeteoWxAPI = True
-riverListDefault = # NOAA Hydrology data, unique identifiers, LID or USGS ID
 ```
 
 ### Module Settings
@@ -181,6 +181,8 @@ SentryRadius = 100 # radius in meters to detect someone close to the bot
 SentryChannel = 9 # holdoff time multiplied by seconds(20) of the watchdog
 SentryHoldoff = 2 # channel to send a message to when the watchdog is triggered
 sentryIgnoreList = # list of ignored nodes numbers ex: 2813308004,4258675309
+highFlyingAlert = True # HighFlying Node alert
+highFlyingAlertAltitude = 2000 # Altitude in meters to trigger the alert
 ```
 
 ### E-Mail / SMS Settings
@@ -212,20 +214,21 @@ alert_interface = 1
 To Alert on Mesh with the EAS API you can set the channels and enable, checks every 20min.
 
 #### FEMA iPAWS/EAS and NINA
-This uses USA: SAME, FIPS, ZIP code to locate the alerts in the feed. By default ignoring Test messages.
+This uses USA: SAME, FIPS, to locate the alerts in the feed. By default ignoring Test messages.
 
 ```ini
 eAlertBroadcastEnabled = False # Goverment IPAWS/CAP Alert Broadcast
 eAlertBroadcastCh = 2,3 # Goverment Emergency IPAWS/CAP Alert Broadcast Channels
 ignoreFEMAenable = True # Ignore any headline that includes followig word list
 ignoreFEMAwords = test,exercise
-# comma separated list of codes (e.g., SAME,FIPS,ZIP) trigger local alert.
-# find your SAME https://www.weather.gov/nwr/counties
-mySAME = 053029,053073
+# comma separated list of FIPS codes to trigger local alert. find your FIPS codes at https://en.wikipedia.org/wiki/Federal_Information_Processing_Standard_state_code
+myFIPSList = 57,58,53
+# find your SAME https://www.weather.gov/nwr/counties comma separated list of SAME code to further refine local alert.
+mySAMEList = 053029,053073
 
 # To use other country services enable only a single optional serivce
-
 enableDEalerts = False # Use DE Alert Broadcast Data see template for filters
+myRegionalKeysDE = 110000000000,120510000000
 ```
 
 #### NOAA EAS
@@ -236,6 +239,22 @@ enableDEalerts = False # Use DE Alert Broadcast Data see template for filters
 wxAlertBroadcastEnabled = True
 # EAS Alert Broadcast Channels
 wxAlertBroadcastCh = 2,4
+ignoreEASenable = True # Ignore any headline that includes followig word list
+ignoreEASwords = test,advisory
+```
+
+#### USGS River flow data and Volcano alerts
+Using the USGS water data page locate a water flow device, for example Columbia River at Vancouver, WA - USGS-14144700
+
+Volcano Alerts use lat/long to determine ~1000km radius
+```ini
+[location]
+# USGS Hydrology unique identifiers, LID or USGS ID https://waterdata.usgs.gov
+riverListDefault = 14144700
+
+# USGS Volcano alerts Enable USGS Volcano Alert Broadcast
+volcanoAlertBroadcastEnabled = False
+volcanoAlertBroadcastCh = 2
 ```
 
 ### Repeater Settings
@@ -334,9 +353,20 @@ In the config.ini enable the module
 ```ini
 [scheduler]
 # enable or disable the scheduler module
-enabled = True
+enabled = False
+# interface to send the message to
+interface = 1
+# channel to send the message to
+channel = 2
+message = "MeshBot says Hello! DM for more info."
+# value can be min,hour,day,mon,tue,wed,thu,fri,sat,sun
+value =
+# interval to use when time is not set (e.g. every 2 days)
+interval = 
+# time of day in 24:00 hour format when value is 'day' and interval is not set
+time =
 ```
- The actions are via code only at this time. See mesh_bot.py around line [1097](https://github.com/SpudGunMan/meshing-around/blob/e94581936530c76ea43500eebb43f32ba7ed5e19/mesh_bot.py#L1097) to edit the schedule. See [schedule documentation](https://schedule.readthedocs.io/en/stable/) for more. Recomend to backup changes so they dont get lost.
+ The basic brodcast message can be setup in condig.ini. For advanced, See mesh_bot.py around the bottom of file, line [1491](https://github.com/SpudGunMan/meshing-around/blob/e94581936530c76ea43500eebb43f32ba7ed5e19/mesh_bot.py#L1491) to edit the schedule. See [schedule documentation](https://schedule.readthedocs.io/en/stable/) for more. Recomend to backup changes so they dont get lost.
 
 ```python
 #Send WX every Morning at 08:00 using handle_wxc function to channel 2 on device 1
@@ -467,7 +497,8 @@ I used ideas and snippets from other responder bots and want to call them out!
 - **Josh**: For more bashing on installer!
 - **dj505**: trying it on windows!
 - **mikecarper**: ideas, and testing. hamtest
-- **Cisien, bitflip, **Woof**, **propstg**, **Josh** and Hailo1999**: For testing and feature ideas on Discord and GitHub.
+- **c.merphy360**: high altitude alerts
+- **Cisien, bitflip, **Woof**, **propstg**, **trs2982**, **Josh** and Hailo1999**: For testing and feature ideas on Discord and GitHub.
 - **Meshtastic Discord Community**: For tossing out ideas and testing code.
 
 ### Tools

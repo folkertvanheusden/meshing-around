@@ -397,6 +397,12 @@ def alertBrodcastNOAA():
     elif currentAlert == NO_ALERTS:
         wxAlertCacheNOAA = ""
         return False
+    if ignoreEASenable:
+        # check if the alert is in the ignoreEAS list
+        for word in ignoreEASwords:
+            if word.lower() in currentAlert[0].lower():
+                logger.debug(f"Location:Ignoring NOAA Alert: {currentAlert[0]} containing {word}")
+                return False
     # broadcast the alerts send to wxBrodcastCh
     elif currentAlert[0] not in wxAlertCacheNOAA:
         # Check if the current alert is not in the weather alert cache
@@ -461,12 +467,11 @@ def getIpawsAlert(lat=0, lon=0, shortAlerts = False):
     # get the latest IPAWS alert from FEMA
     alert = ''
     alerts = []
+    linked_data = ''
     
     # set the API URL for IPAWS
     namespace = "urn:oasis:names:tc:emergency:cap:1.2"
     alert_url = "https://apps.fema.gov/IPAWSOPEN_EAS_SERVICE/rest/feed"
-    if ipawsPIN != "000000":
-        alert_url += "?pin=" + ipawsPIN
 
     # get the alerts from FEMA
     try:
@@ -484,23 +489,49 @@ def getIpawsAlert(lat=0, lon=0, shortAlerts = False):
     # extract alerts from main feed
     for entry in alertxml.getElementsByTagName("entry"):
         link = entry.getElementsByTagName("link")[0].getAttribute("href")
+
+        ## state FIPS
+        ## This logic is being added to reduce load on FEMA server.
+        stateFips = None
+        for cat in entry.getElementsByTagName("category"):
+            if cat.getAttribute("label") == "statefips":
+                stateFips = cat.getAttribute("term")
+                break
+
+        if stateFips is None:
+            # no stateFIPS found — skip
+            continue
+
+        # check if it matches your list
+        if stateFips not in myStateFIPSList:
+            #logger.debug(f"Skipping FEMA record link {link} with stateFIPS code of: {stateFips} because it doesn't match our StateFIPSList {myStateFIPSList}")
+            continue  # skip to next entry
+
         try:
-            #pin check
-            if ipawsPIN != "000000":
-                link += "?pin=" + ipawsPIN
             # get the linked alert data from FEMA
             linked_data = requests.get(link, timeout=urlTimeoutSeconds)
-            if not linked_data.ok:
+            if not linked_data.ok or not linked_data.text.strip():
+                # if the linked data is not ok, skip this alert
                 #logger.warning(f"System: iPAWS Error fetching linked alert data from {link}")
                 continue
+            else:
+                linked_xml = xml.dom.minidom.parseString(linked_data.text)
+                # this alert is a full CAP alert
         except (requests.exceptions.RequestException):
             logger.warning(f"System: iPAWS Error fetching embedded alert data from {link}")
             continue
-        
-        # this alert is a full CAP alert
-        linked_xml = xml.dom.minidom.parseString(linked_data.text)
+        except xml.parsers.expat.ExpatError:
+            logger.warning(f"System: iPAWS Error parsing XML from {link}")
+            continue
+        except Exception as e:
+            logger.debug(f"System: iPAWS Error processing alert data from {link}: {e}")
+            continue
 
         for info in linked_xml.getElementsByTagName("info"):
+            # only get en-US language alerts (alternative is es-US)
+            language_nodes = info.getElementsByTagName("language")
+            if not any(node.firstChild and node.firstChild.nodeValue.strip() == "en-US" for node in language_nodes):
+                    continue  # skip if not en-US
             # extract values from XML
             sameVal = "NONE"
             geocode_value = "NONE"
@@ -518,27 +549,31 @@ def getIpawsAlert(lat=0, lon=0, shortAlerts = False):
 
                 area_table = info.getElementsByTagName("area")[0]
                 areaDesc = area_table.getElementsByTagName("areaDesc")[0].childNodes[0].nodeValue
-                
                 geocode_table = area_table.getElementsByTagName("geocode")[0]
                 geocode_type = geocode_table.getElementsByTagName("valueName")[0].childNodes[0].nodeValue
                 geocode_value = geocode_table.getElementsByTagName("value")[0].childNodes[0].nodeValue
                 if geocode_type == "SAME":
                     sameVal = geocode_value
+                
             except Exception as e:
                 logger.debug(f"System: iPAWS Error extracting alert data: {link}")
                 #print(f"DEBUG: {info.toprettyxml()}")
                 continue
 
-            # check if the alert is for the current location, if wanted keep alert
-            if (sameVal in mySAME) or (geocode_value in mySAME):
+             # check if the alert is for the SAME location, if wanted keep alert
+            if (sameVal in mySAMEList) or (geocode_value in mySAMEList) or mySAMEList == ['']:
                 # ignore the FEMA test alerts
                 if ignoreFEMAenable:
+                    ignore_alert = False
                     for word in ignoreFEMAwords:
                         if word.lower() in headline.lower():
-                            logger.debug(f"System: Ignoring FEMA Alert: {headline} containing {word} at {areaDesc}")
-                            continue
+                            logger.debug(f"System: Filtering FEMA Alert by WORD: {headline} containing {word} at {areaDesc}")
+                            ignore_alert = True
+                            break
+                if ignore_alert:
+                    continue
 
-                # add to alerts list
+                # add to alert list
                 alerts.append({
                     'alertType': alertType,
                     'alertCode': alertCode,
@@ -548,10 +583,10 @@ def getIpawsAlert(lat=0, lon=0, shortAlerts = False):
                     'geocode_value': geocode_value,
                     'description': description
                 })
-            # else:
-            #     # these are discarded some day but logged for debugging currently
-            #     logger.debug(f"Debug iPAWS: Type:{alertType} Code:{alertCode} Desc:{areaDesc} GeoType:{geocode_type} GeoVal:{geocode_value}, Headline:{headline}")
-    
+            else:
+                logger.debug(f"System: iPAWS Alert not in SAME List: {sameVal} or {geocode_value} for {headline} at {areaDesc}")
+                continue
+
     # return the numWxAlerts of alerts
     if len(alerts) > 0:
         for alertItem in alerts[:numWxAlerts]:
@@ -626,26 +661,36 @@ def get_volcano_usgs(lat=0, lon=0):
     try:
         volcano_data = requests.get(usgs_volcano_url, timeout=urlTimeoutSeconds)
         if not volcano_data.ok:
-            logger.warning("System: USGS fetching volcano alerts from USGS")
+            logger.warning("System: Issue with fetching volcano alerts from USGS")
             return ERROR_FETCHING_DATA
     except (requests.exceptions.RequestException):
-        logger.warning("System: USGS fetching volcano alerts from USGS")
+        logger.warning("System: Issue with fetching volcano alerts from USGS")
         return ERROR_FETCHING_DATA
     volcano_json = volcano_data.json()
     # extract alerts from main feed
-    for alert in volcano_json:
-        # check if the alert lat long is within the range of bot latitudeValue and longitudeValue
-        if (alert['latitude'] >= latitudeValue - 10 and alert['latitude'] <= latitudeValue + 10) and (alert['longitude'] >= longitudeValue - 10 and alert['longitude'] <= longitudeValue + 10):
-            volcano_name = alert['volcano_name_appended']
-            alert_level = alert['alert_level']
-            color_code = alert['color_code']
-            cap_severity = alert['cap_severity']
-            synopsis = alert['synopsis']
-            # format Alert
-            alerts += f"🌋🚨: {volcano_name}, {alert_level} {color_code}, {cap_severity}.\n{synopsis}\n"
-        else:
-            #logger.debug(f"System: USGS volcano alert not in range: {alert['volcano_name_appended']}")
-            continue
+    if volcano_json and isinstance(volcano_json, list):
+        for alert in volcano_json:
+            # check ignore list
+            if ignoreUSGSEnable:
+                for word in ignoreUSGSwords:
+                    if word.lower() in alert['volcano_name_appended'].lower():
+                        logger.debug(f"System: Ignoring USGS Alert: {alert['volcano_name_appended']} containing {word}")
+                        continue
+            # check if the alert lat long is within the range of bot latitudeValue and longitudeValue
+            if (alert['latitude'] >= latitudeValue - 10 and alert['latitude'] <= latitudeValue + 10) and (alert['longitude'] >= longitudeValue - 10 and alert['longitude'] <= longitudeValue + 10):
+                volcano_name = alert['volcano_name_appended']
+                alert_level = alert['alert_level']
+                color_code = alert['color_code']
+                cap_severity = alert['cap_severity']
+                synopsis = alert['synopsis']
+                # format Alert
+                alerts += f"🌋🚨: {volcano_name}, {alert_level} {color_code}, {cap_severity}.\n{synopsis}\n"
+            else:
+                #logger.debug(f"System: USGS volcano alert not in range: {alert['volcano_name_appended']}")
+                continue
+    else:
+        logger.debug("Location:Error fetching volcano data from USGS")
+        return NO_ALERTS
     if alerts == "":
         return NO_ALERTS
     # trim off last newline
@@ -654,5 +699,3 @@ def get_volcano_usgs(lat=0, lon=0):
     # return the alerts
     alerts = abbreviate_noaa(alerts)
     return alerts
-
-

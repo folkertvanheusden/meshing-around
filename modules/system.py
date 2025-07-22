@@ -261,6 +261,7 @@ if ble_count > 1:
 logger.debug(f"System: Initializing Interfaces")
 interface1 = interface2 = interface3 = interface4 = interface5 = interface6 = interface7 = interface8 = interface9 = None
 retry_int1 = retry_int2 = retry_int3 = retry_int4 = retry_int5 = retry_int6 = retry_int7 = retry_int8 = retry_int9 = False
+max_retry_count1 = max_retry_count2 = max_retry_count3 = max_retry_count4 = max_retry_count5 = max_retry_count6 = max_retry_count7 = max_retry_count8 = max_retry_count9 = 3
 for i in range(1, 10):
     interface_type = globals().get(f'interface{i}_type')
     if not interface_type or interface_type == 'none' or globals().get(f'interface{i}_enabled') == False:
@@ -390,27 +391,27 @@ def get_node_list(nodeInt=1):
     
     return node_list
 
-def get_node_location(number, nodeInt=1, channel=0):
+def get_node_location(nodeID, nodeInt=1, channel=0):
     interface = globals()[f'interface{nodeInt}']
     # Get the location of a node by its number from nodeDB on device
+    # if no location data, return default location
     latitude = latitudeValue
     longitude = longitudeValue
     position = [latitudeValue,longitudeValue]
-    lastheard = 0
     if interface.nodes:
         for node in interface.nodes.values():
-            if number == node['num']:
-                if 'position' in node:
+            if nodeID == node['num']:
+                if 'position' in node and node['position'] is not {}:
                     try:
                         latitude = node['position']['latitude']
                         longitude = node['position']['longitude']
+                        logger.debug(f"System: location data for {nodeID} is {latitude},{longitude}")
+                        position = [latitude,longitude]
                     except Exception as e:
-                        logger.warning(f"System: Error getting location data for {number}")
-                    logger.debug(f"System: location data for {number} is {latitude},{longitude}")
-                    position = [latitude,longitude]
+                        logger.debug(f"System: No location data for {nodeID} use default location")
                     return position
                 else:
-                    logger.warning(f"System: No location data for {number} using default location")
+                    logger.debug(f"System: No location data for {nodeID} using default location")
                     # request location data
                     # try:
                     #     logger.debug(f"System: Requesting location data for {number}")
@@ -419,7 +420,7 @@ def get_node_location(number, nodeInt=1, channel=0):
                     #     logger.error(f"System: Error requesting location data for {number}. Error: {e}")
                     return position
         else:
-            logger.warning(f"System: No nodes found")
+            logger.warning(f"System: Location for NodeID {nodeID} not found in nodeDb")
             return position
 
 
@@ -810,7 +811,7 @@ def handleAlertBroadcast(deviceID=1):
 
     if volcanoAlertBroadcastEnabled:
         volcanoAlert = get_volcano_usgs(latitudeValue, longitudeValue)
-        if volcanoAlert and volcanoAlert != NO_ALERTS and volcanoAlert != ERROR_FETCHING_DATA:
+        if volcanoAlert and NO_ALERTS not in volcanoAlert and ERROR_FETCHING_DATA not in volcanoAlert:
             # check if the alert is different from the last one
             if volcanoAlert != priorVolcanoAlert:
                 priorVolcanoAlert = volcanoAlert
@@ -822,40 +823,9 @@ def handleAlertBroadcast(deviceID=1):
                 return True
 
 def onDisconnect(interface):
-    global retry_int1, retry_int2, retry_int3, retry_int4, retry_int5, retry_int6, retry_int7, retry_int8, retry_int9
-    rxType = type(interface).__name__
-    if rxType in ['SerialInterface', 'TCPInterface', 'BLEInterface']:
-        identifier = interface.__dict__.get('devPath', interface.__dict__.get('hostname', 'BLE'))
-        logger.critical(f"System: Lost Connection to Device {identifier}")
-        for i in range(1, 10):
-            if globals().get(f'interface{i}_enabled'):
-                if (rxType == 'SerialInterface' and globals().get(f'port{i}') in identifier) or \
-                   (rxType == 'TCPInterface' and globals().get(f'hostname{i}') in identifier) or \
-                   (rxType == 'BLEInterface' and globals().get(f'interface{i}_type') == 'ble'):
-                    globals()[f'retry_int{i}'] = True
-                    break
-
-def exit_handler():
-    # Close the interface and save the BBS messages
-    logger.debug(f"System: Closing Autoresponder")
-    try:
-        logger.debug(f"System: Closing Interface1")
-        interface1.close()
-        if multiple_interface:
-            for i in range(2, 10):
-                if globals().get(f'interface{i}_enabled'):
-                    logger.debug(f"System: Closing Interface{i}")
-                    globals()[f'interface{i}'].close()
-    except Exception as e:
-        logger.error(f"System: closing: {e}")
-    if bbs_enabled:
-        save_bbsdb()
-        save_bbsdm()
-        logger.debug(f"System: BBS Messages Saved")
-    logger.debug(f"System: Exiting")
-    asyncLoop.stop()
-    asyncLoop.close()
-    exit (0)
+    # Handle disconnection of the interface
+    logger.warning(f"System: Abrupt Disconnection of Interface detected")
+    interface.close()
 
 # Telemetry Functions
 telemetryData = {}
@@ -984,8 +954,14 @@ def consumeMetadata(packet, rxNode=0):
         
                 for key in keys:
                     positionMetadata[nodeID][key] = position_data.get(key, 0)
+
+                # if altitude is over 2000 send a log and message for high-flying nodes and not in highfly_ignoreList
+                if position_data.get('altitude', 0) > highfly_altitude and highfly_enabled and str(nodeID) not in highfly_ignoreList:
+                    logger.info(f"System: High Altitude {position_data['altitude']}m on Device: {rxNode} NodeID: {nodeID}")
+                    send_message(f"High Altitude {position_data['altitude']}m on Device:{rxNode} Node:{get_name_from_number(nodeID,'short',rxNode)}", highfly_channel, 0, rxNode)
+                    time.sleep(responseDelay)
         
-                # Keep the positionMetadata dictionary at 5 records
+                # Keep the positionMetadata dictionary at a maximum size of 20
                 if len(positionMetadata) > 20:
                     # Remove the oldest entry
                     oldest_nodeID = next(iter(positionMetadata))
@@ -1102,7 +1078,7 @@ async def handleFileWatcher():
                 # if fileWatchBroadcastCh list contains multiple channels, broadcast to all
                 if type(file_monitor_broadcastCh) is list:
                     for ch in file_monitor_broadcastCh:
-                        if antiSpam and ch != publicChannel:
+                        if antiSpam and int(ch) != publicChannel:
                             send_message(msg, int(ch), 0, 1)
                             time.sleep(responseDelay)
                             if multiple_interface:
@@ -1128,21 +1104,26 @@ async def handleFileWatcher():
         pass
 
 async def retry_interface(nodeID):
-    global max_retry_count
+    global retry_int1, retry_int2, retry_int3, retry_int4, retry_int5, retry_int6, retry_int7, retry_int8, retry_int9
+    global max_retry_count1, max_retry_count2, max_retry_count3, max_retry_count4, max_retry_count5, max_retry_count6, max_retry_count7, max_retry_count8, max_retry_count9
     interface = globals()[f'interface{nodeID}']
     retry_int = globals()[f'retry_int{nodeID}']
-    max_retry_count = globals()[f'max_retry_count{nodeID}']
+
+    if dont_retry_disconnect:
+        logger.critical(f"System: dont_retry_disconnect is set, not retrying interface{nodeID}")
+        exit_handler()
 
     if interface is not None:
-        retry_int = True
-        max_retry_count -= 1
+        globals()[f'retry_int{nodeID}'] = True
+        globals()[f'max_retry_count{nodeID}'] -= 1
+        logger.debug(f"System: Retrying interface{nodeID} {globals()[f'max_retry_count{nodeID}']} attempts left")
         try:
             interface.close()
+            logger.debug(f"System: Retrying interface{nodeID} in 15 seconds")
         except Exception as e:
             logger.error(f"System: closing interface{nodeID}: {e}")
 
-    logger.debug(f"System: Retrying interface{nodeID} in 15 seconds")
-    if max_retry_count == 0:
+    if globals()[f'max_retry_count{nodeID}'] == 0:
         logger.critical(f"System: Max retry count reached for interface{nodeID}")
         exit_handler()
 
@@ -1152,13 +1133,15 @@ async def retry_interface(nodeID):
         if retry_int:
             interface = None
             globals()[f'interface{nodeID}'] = None
-            logger.debug(f"System: Retrying Interface{nodeID}")
             interface_type = globals()[f'interface{nodeID}_type']
             if interface_type == 'serial':
+                logger.debug(f"System: Retrying Interface{nodeID} Serial on port: {globals().get(f'port{nodeID}')}")
                 globals()[f'interface{nodeID}'] = meshtastic.serial_interface.SerialInterface(globals().get(f'port{nodeID}'))
             elif interface_type == 'tcp':
+                logger.debug(f"System: Retrying Interface{nodeID} TCP on hostname: {globals().get(f'hostname{nodeID}')}")
                 globals()[f'interface{nodeID}'] = meshtastic.tcp_interface.TCPInterface(globals().get(f'hostname{nodeID}'))
             elif interface_type == 'ble':
+                logger.debug(f"System: Retrying Interface{nodeID} BLE on mac: {globals().get(f'mac{nodeID}')}")
                 globals()[f'interface{nodeID}'] = meshtastic.ble_interface.BLEInterface(globals().get(f'mac{nodeID}'))
             logger.debug(f"System: Interface{nodeID} Opened!")
             globals()[f'retry_int{nodeID}'] = False
@@ -1248,3 +1231,24 @@ async def watchdog():
                 except Exception as e:
                     logger.error(f"System: retrying interface{i}: {e}")
 
+def exit_handler():
+    # Close the interface and save the BBS messages
+    logger.debug(f"System: Closing Autoresponder")
+    try:
+        logger.debug(f"System: Closing Interface1")
+        interface1.close()
+        if multiple_interface:
+            for i in range(2, 10):
+                if globals().get(f'interface{i}_enabled'):
+                    logger.debug(f"System: Closing Interface{i}")
+                    globals()[f'interface{i}'].close()
+    except Exception as e:
+        logger.error(f"System: closing: {e}")
+    if bbs_enabled:
+        save_bbsdb()
+        save_bbsdm()
+        logger.debug(f"System: BBS Messages Saved")
+    logger.debug(f"System: Exiting")
+    asyncLoop.stop()
+    asyncLoop.close()
+    exit (0)

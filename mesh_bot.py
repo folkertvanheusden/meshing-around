@@ -20,7 +20,6 @@ restrictedResponse = "🤖only available in a Direct Message📵" # "" for none
 
 # Global Variables
 DEBUGpacket = False # Debug print the packet rx
-DEBUGhops = False # Debug print hop info and bad hop count packets
 
 def auto_response(message, snr, rssi, hop, pkiStatus, message_from_id, channel_number, deviceID, isDM):
     global cmdHistory
@@ -809,7 +808,7 @@ def handle_bbspost(message, message_from_id, deviceID):
                 toNode = int(toNode.strip("!"),16)
             except ValueError as e:
                 toNode = 0
-        elif toNode.isalpha() or not toNode.isnumeric():
+        elif toNode.isalpha() or not toNode.isnumeric() or len(toNode) < 5:
             # try short name
             toNode = get_num_from_short_name(toNode, deviceID)
 
@@ -908,7 +907,7 @@ def handle_history(message, nodeid, deviceID, isDM, lheard=False):
             prettyTime = getPrettyTime(cmdTime)
 
             # history display output
-            if nodeid in bbs_admin_list and cmdHistory[i]['nodeID'] not in lheardCmdIgnoreNode:
+            if str(nodeid) in bbs_admin_list and cmdHistory[i]['nodeID'] not in lheardCmdIgnoreNode:
                 buffer.append((get_name_from_number(cmdHistory[i]['nodeID'], 'short', deviceID), cmdHistory[i]['cmd'], prettyTime))
             elif cmdHistory[i]['nodeID'] == nodeid and cmdHistory[i]['nodeID'] not in lheardCmdIgnoreNode:
                 buffer.append((get_name_from_number(nodeid, 'short', deviceID), cmdHistory[i]['cmd'], prettyTime))
@@ -1112,16 +1111,15 @@ def onReceive(packet, interface):
     
     if rxType == 'TCPInterface':
         rxHost = interface.__dict__.get('hostname', 'unknown')
-        if hostname1 in rxHost and interface1_type == 'tcp': rxNode = 1
-        elif multiple_interface and hostname2 in rxHost and interface2_type == 'tcp': rxNode = 2
-        elif multiple_interface and hostname3 in rxHost and interface3_type == 'tcp': rxNode = 3
-        elif multiple_interface and hostname4 in rxHost and interface4_type == 'tcp': rxNode = 4
-        elif multiple_interface and hostname5 in rxHost and interface5_type == 'tcp': rxNode = 5
-        elif multiple_interface and hostname6 in rxHost and interface6_type == 'tcp': rxNode = 6
-        elif multiple_interface and hostname7 in rxHost and interface7_type == 'tcp': rxNode = 7
-        elif multiple_interface and hostname8 in rxHost and interface8_type == 'tcp': rxNode = 8
-        elif multiple_interface and hostname9 in rxHost and interface9_type == 'tcp': rxNode = 9
-
+        if rxHost and hostname1 in rxHost and interface1_type == 'tcp': rxNode = 1
+        elif multiple_interface and rxHost and hostname2 in rxHost and interface2_type == 'tcp': rxNode = 2
+        elif multiple_interface and rxHost and hostname3 in rxHost and interface3_type == 'tcp': rxNode = 3
+        elif multiple_interface and rxHost and hostname4 in rxHost and interface4_type == 'tcp': rxNode = 4
+        elif multiple_interface and rxHost and hostname5 in rxHost and interface5_type == 'tcp': rxNode = 5
+        elif multiple_interface and rxHost and hostname6 in rxHost and interface6_type == 'tcp': rxNode = 6
+        elif multiple_interface and rxHost and hostname7 in rxHost and interface7_type == 'tcp': rxNode = 7
+        elif multiple_interface and rxHost and hostname8 in rxHost and interface8_type == 'tcp': rxNode = 8
+        elif multiple_interface and rxHost and hostname9 in rxHost and interface9_type == 'tcp': rxNode = 9
     if rxType == 'BLEInterface':
         if interface1_type == 'ble': rxNode = 1
         elif multiple_interface and interface2_type == 'ble': rxNode = 2
@@ -1198,7 +1196,7 @@ def onReceive(packet, interface):
                 else:
                     hop_start = 0
             
-            if DEBUGhops:
+            if enableHopLogs:
                 logger.debug(f"System: Packet HopDebugger: hop_away:{hop_away} hop_limit:{hop_limit} hop_start:{hop_start}")
                 if hop_away == 0 and hop_limit == 0 and hop_start == 0:
                     logger.debug(f"System: Packet HopDebugger: No hop count found in PACKET {packet} END PACKET")
@@ -1230,7 +1228,7 @@ def onReceive(packet, interface):
                 isDM = True
                 # check if the message contains a trap word, DMs are always responded to
                 if (messageTrap(message_string) and not llm_enabled) or messageTrap(message_string.split()[0]):
-                    # log the message to the message log
+                    # log the message to stdout
                     logger.info(f"Device:{rxNode} Channel: {channel_number} " + CustomFormatter.green + f"Received DM: " + CustomFormatter.white + f"{message_string} " + CustomFormatter.purple +\
                                 "From: " + CustomFormatter.white + f"{get_name_from_number(message_from_id, 'long', rxNode)}")
                     # respond with DM
@@ -1248,7 +1246,7 @@ def onReceive(packet, interface):
                             playingGame = False
 
                     if not playingGame:
-                        if llm_enabled:
+                        if llm_enabled and llmReplyToNonCommands:
                             # respond with LLM
                             llm = handle_llm(message_from_id, channel_number, rxNode, message_string, publicChannel)
                             send_message(llm, channel_number, message_from_id, rxNode)
@@ -1277,7 +1275,8 @@ def onReceive(packet, interface):
                             time.sleep(responseDelay)
                             
                     # log the message to the message log
-                    msgLogger.info(f"Device:{rxNode} Channel:{channel_number} | {get_name_from_number(message_from_id, 'long', rxNode)} | " + message_string.replace('\n', '-nl-'))
+                    if log_messages_to_file:
+                        msgLogger.info(f"Device:{rxNode} Channel:{channel_number} | {get_name_from_number(message_from_id, 'long', rxNode)} | DM | " + message_string.replace('\n', '-nl-'))
             else:
                 # message is on a channel
                 if messageTrap(message_string):
@@ -1345,14 +1344,18 @@ def onReceive(packet, interface):
                     # if QRZ enabled check if we have said hello
                     if qrz_hello_enabled:
                         if never_seen_before(message_from_id):
-                            name = {get_name_from_number(message_from_id, 'short', rxNode)}
-                            # add to qrz_hello list
-                            hello(message_from_id, name)
-                            # send a hello message as a DM
-                            if not train_qrz:
-                                time.sleep(responseDelay)
-                                send_message(f"Hello {name} {qrz_hello_string}", channel_number, message_from_id, rxNode)
-                                time.sleep(responseDelay)
+                            name = get_name_from_number(message_from_id, 'short', rxNode)
+                            if isinstance(name, str) and name.startswith("!") and len(name) == 9:
+                                # we didnt get a info packet yet so wait and ingore this go around
+                                logger.debug(f"System: QRZ Hello ignored, no info packet yet")
+                            else:
+                                # add to qrz_hello list
+                                hello(message_from_id, name)
+                                # send a hello message as a DM
+                                if not train_qrz:
+                                    time.sleep(responseDelay)
+                                    send_message(f"Hello {name} {qrz_hello_string}", channel_number, message_from_id, rxNode)
+                                    time.sleep(responseDelay)
         else:
             # Evaluate non TEXT_MESSAGE_APP packets
             consumeMetadata(packet, rxNode)
@@ -1375,8 +1378,9 @@ async def start_rx():
     
     if llm_enabled:
         logger.debug(f"System: Ollama LLM Enabled, loading model {llmModel} please wait")
-        llm_query(" ")
-        logger.debug(f"System: LLM model {llmModel} loaded")
+        llmLoad = llm_query(" ")
+        if "trouble" not in llmLoad:
+            logger.debug(f"System: LLM Model {llmModel} loaded")
 
     if log_messages_to_file:
         logger.debug("System: Logging Messages to disk")
@@ -1406,6 +1410,8 @@ async def start_rx():
         logger.debug(f"System: MOTD Enabled using {MOTD}")
     if sentry_enabled:
         logger.debug(f"System: Sentry Mode Enabled {sentry_radius}m radius reporting to channel:{secure_channel}")
+    if highfly_enabled:
+        logger.debug(f"System: HighFly Enabled using {highfly_altitude}m limit reporting to channel:{highfly_channel}")
     if store_forward_enabled:
         logger.debug(f"System: Store and Forward Enabled using limit: {storeFlimit}")
     if useDMForResponse:
@@ -1425,7 +1431,12 @@ async def start_rx():
     if wxAlertBroadcastEnabled:
         logger.debug(f"System: Weather Alert Broadcast Enabled on channels {wxAlertBroadcastChannel}")
     if emergencyAlertBrodcastEnabled:
-        logger.debug(f"System: Emergency Alert Broadcast Enabled on channels {emergencyAlertBroadcastCh}")
+        logger.debug(f"System: Emergency Alert Broadcast Enabled on channels {emergencyAlertBroadcastCh} for FIPS codes {myStateFIPSList}")
+        # check if the FIPS codes are set
+        if myStateFIPSList == ['']:
+            logger.warning(f"System: No FIPS codes set for iPAWS Alerts")
+
+
     if emergency_responder_enabled:
         logger.debug(f"System: Emergency Responder Enabled on channels {emergency_responder_alert_channel} for interface {emergency_responder_alert_interface}")
     if volcanoAlertBroadcastEnabled:
@@ -1444,11 +1455,51 @@ async def start_rx():
         else:
             logger.debug(f"System: SMTP Email Alerting Enabled")
     if scheduler_enabled:
-        # Examples of using the scheduler, Times here are in 24hr format
-        # https://schedule.readthedocs.io/en/stable/
-        
         # Reminder Scheduler is enabled every Monday at noon send a log message
-        schedule.every().monday.at("12:00").do(lambda: logger.info("System: Scheduled Broadcast Reminder"))
+        schedule.every().monday.at("12:00").do(lambda: logger.info("System: Scheduled Broadcast Enabled Reminder"))
+
+        # basic scheduler
+        if schedulerValue != '':
+            logger.debug(f"System: Starting the broadcast scheduler from config.ini")
+            if schedulerValue.lower() == 'day':
+                if schedulerTime != '':
+                    # Send a message every day at the time set in schedulerTime
+                    schedule.every().day.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+                else:
+                    # Send a message every day at the time set in schedulerInterval
+                    schedule.every(int(schedulerInterval)).days.do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'mon' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Monday at the time set in schedulerTime
+                schedule.every().monday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'tue' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Tuesday at the time set in schedulerTime
+                schedule.every().tuesday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'wed' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Wednesday at the time set in schedulerTime
+                schedule.every().wednesday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'thu' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Thursday at the time set in schedulerTime
+                schedule.every().thursday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'fri' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Friday at the time set in schedulerTime
+                schedule.every().friday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'sat' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Saturday at the time set in schedulerTime
+                schedule.every().saturday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'sun' in schedulerValue.lower() and schedulerTime != '':
+                # Send a message every Sunday at the time set in schedulerTime
+                schedule.every().sunday.at(schedulerTime).do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'hour' in schedulerValue.lower():
+                # Send a message every hour at the time set in schedulerTime
+                schedule.every(int(schedulerInterval)).hours.do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+            elif 'min' in schedulerValue.lower():
+                # Send a message every minute at the time set in schedulerTime
+                schedule.every(int(schedulerInterval)).minutes.do(lambda: send_message(schedulerMessage, schedulerChannel, 0, schedulerInterface))
+        else:
+            logger.debug(f"System: Starting the broadcast scheduler")
+
+        # Enhanced Examples of using the scheduler, Times here are in 24hr format
+        # https://schedule.readthedocs.io/en/stable/
 
         # Good Morning Every day at 09:00 using send_message function to channel 2 on device 1
         #schedule.every().day.at("09:00").do(lambda: send_message("Good Morning", 2, 0, 1))
@@ -1482,8 +1533,6 @@ async def start_rx():
 
         # Send bbslink looking for peers every other day at 10:00 using send_message function to channel 3 on device 1
         #schedule.every(2).days.at("10:00").do(lambda: send_message("bbslink MeshBot looking for peers", 3, 0, 1))
-        
-        logger.debug("System: Starting the broadcast scheduler")
         await BroadcastScheduler()
 
     # here we go loopty loo
@@ -1508,10 +1557,11 @@ async def main():
 
     await asyncio.sleep(0.01)
 
-try:
-    if __name__ == "__main__":
+if __name__ == "__main__":
+    try:
         asyncio.run(main())
-except KeyboardInterrupt:
-    exit_handler()
-    pass
+    except KeyboardInterrupt:
+        exit_handler()
+    except SystemExit:
+        pass
 # EOF

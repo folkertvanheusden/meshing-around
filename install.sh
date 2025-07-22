@@ -4,6 +4,7 @@
 # install.sh
 cd "$(dirname "$0")"
 program_path=$(pwd)
+chronjob="0 1 * * * /usr/bin/python3 $program_path/etc/report_generator5.py"
 printf "\n########################"
 printf "\nMeshing Around Installer\n"
 printf "########################\n"
@@ -193,17 +194,19 @@ if [[ $(echo "${meshbotservice}" | grep -i "^y") ]] || [[ $(echo "${embedded}" |
     sudo usermod -a -G meshbot meshbot
     whoami="meshbot"
     echo "Added user meshbot with no home directory"
-    sudo usermod -a -G dialout $whoami
-    sudo usermod -a -G tty $whoami
-    sudo usermod -a -G bluetooth $whoami
-    echo "Added meshbot to dialout, tty, and bluetooth groups"
-
-    sudo chown -R $whoami:$whoami $program_path/logs
-    sudo chown -R $whoami:$whoami $program_path/data
-    echo "Permissions set for meshbot on logs and data directories"
 else
     whoami=$(whoami)
 fi
+# set basic permissions for the bot user
+sudo usermod -a -G dialout $whoami
+sudo usermod -a -G tty $whoami
+sudo usermod -a -G bluetooth $whoami
+echo "Added user $whoami to dialout, tty, and bluetooth groups"
+
+sudo chown -R $whoami:$whoami $program_path/logs
+sudo chown -R $whoami:$whoami $program_path/data
+echo "Permissions set for meshbot on logs and data directories"
+
 # set the correct user in the service file
 replace="s|User=pi|User=$whoami|g"
 sed -i $replace etc/pong_bot.service
@@ -276,6 +279,8 @@ if [[ $(echo "${embedded}" | grep -i "^n") ]]; then
     printf "sudo journalctl -u %s.service\n" "$service" >> install_notes.txt
     printf "sudo systemctl stop %s.service\n" "$service" >> install_notes.txt
     printf "sudo systemctl disable %s.service\n" "$service" >> install_notes.txt
+    printf "Reporting chron job added to run report_generator5.py\n" >> install_notes.txt
+    printf "chronjob: %s\n" "$chronjob" >> install_notes.txt
     
     if [[ $(echo "${venv}" | grep -i "^y") ]]; then
         printf "\nFor running on venv, virtual launch bot with './launch.sh mesh' in path $program_path\n" >> install_notes.txt
@@ -305,6 +310,14 @@ else
     sudo systemctl daemon-reload
     sudo systemctl enable $service.service
     sudo systemctl start $service.service
+    # check if the cron job already exists
+    if ! crontab -l | grep -q "$chronjob"; then
+        # add the cron job to run the report_generator5.py script
+        (crontab -l 2>/dev/null; echo "$chronjob") | crontab -
+        printf "\nAdded cron job to run report_generator5.py\n"
+    else
+        printf "\nCron job already exists, skipping\n"
+    fi
     printf "Reference following commands:\n\n" "$service" > install_notes.txt
     printf "sudo systemctl status %s.service\n" "$service" >> install_notes.txt
     printf "sudo systemctl start %s.service\n" "$service" >> install_notes.txt
@@ -328,7 +341,6 @@ exit 0
 # sudo systemctl stop mesh_bot_reporting
 # sudo systemctl disable mesh_bot_reporting
 # sudo rm /etc/systemd/system/mesh_bot.service
-# sudo rm /etc/systemd/system/mesh_bot_reporting.service
 # sudo rm /etc/systemd/system/mesh_bot_w3.service
 # sudo rm /etc/systemd/system/pong_bot.service
 # sudo systemctl daemon-reload
